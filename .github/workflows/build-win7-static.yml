@@ -1,0 +1,73 @@
+name: build-win7-static
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-win7-windows-msvc
+            arch: amd64
+            out: imc64.exe
+          - target: i686-win7-windows-msvc
+            arch: x86
+            out: imc.exe
+    steps:
+      - name: Checkout fork (for tools/verify_pe.py)
+        uses: actions/checkout@v4
+
+      - name: Checkout caesium-clt v1.4.0 sources
+        uses: actions/checkout@v4
+        with:
+          repository: Lymphatus/caesium-clt
+          ref: v1.4.0
+          path: src
+
+      - name: Setup MSVC (${{ matrix.arch }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Install nightly Rust + rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: ${{ matrix.target }}
+
+      - name: Build (${{ matrix.target }})
+        working-directory: src
+        shell: pwsh
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: |
+          cargo +nightly build --release -Z build-std=std,panic_abort --target ${{ matrix.target }}
+
+      - name: Rename and verify PE imports
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item "src/target/${{ matrix.target }}/release/caesiumclt.exe" "out/${{ matrix.out }}"
+          python tools/verify_pe.py "out/${{ matrix.out }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: win7-static-${{ matrix.target }}
+          path: out/${{ matrix.out }}
+          if-no-files-found: error
